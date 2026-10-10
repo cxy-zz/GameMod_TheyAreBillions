@@ -16,14 +16,7 @@ namespace BattleSisterMod
 {
     public sealed class BattleSister : ShooterSoldier
     {
-        private static DXProjectImage _portrait;
-
         public BattleSister() { }
-
-        internal static void SetPortrait(DXProjectImage portrait)
-        {
-            _portrait = portrait;
-        }
 
         public override List<Type> DefaultComponents
         {
@@ -37,7 +30,8 @@ namespace BattleSisterMod
 
         public override DXProjectImage GetPortraitImage()
         {
-            return _portrait ?? Images.Portraits.get__Ranger();
+            PortraitTint.MarkNextPortrait();
+            return Images.Portraits.get__Ranger();
         }
     }
 
@@ -104,7 +98,6 @@ namespace BattleSisterMod
             BattleSisterLog.Write("OnLoadResources entered; registering entity and barracks command.");
             try
             {
-                BattleSister.SetPortrait(CreateIsolatedRedRangerPortrait());
                 EnsureRegistrationRuleRows();
                 ZXCommand sisterAttack;
                 ZXCommand sisterVeteranAttack;
@@ -119,61 +112,6 @@ namespace BattleSisterMod
             {
                 BattleSisterLog.Write("ERROR during resource registration: " + ex);
             }
-        }
-
-        private static DXProjectImage CreateIsolatedRedRangerPortrait()
-        {
-            DXProjectImage source = Images.Portraits.get__Ranger();
-            Bitmap sourceBitmap = source == null ? null : source.Bitmap;
-            if (sourceBitmap == null && source != null && source.Image != null)
-                sourceBitmap = source.Image.PreviewBitmap;
-            if (sourceBitmap == null)
-            {
-                BattleSisterLog.Write("Could not read the Ranger portrait bitmap; using the unmodified source portrait.");
-                return source;
-            }
-
-            Bitmap recolored = new Bitmap(sourceBitmap);
-            for (int y = 0; y < recolored.Height; y++)
-            for (int x = 0; x < recolored.Width; x++)
-            {
-                Color pixel = recolored.GetPixel(x, y);
-                if (pixel.A == 0 || pixel.GetSaturation() < 0.12f) continue;
-                float hue = pixel.GetHue();
-                if (hue >= 70f && hue <= 175f)
-                    recolored.SetPixel(x, y, ColorFromHsl(2f, pixel.GetSaturation(), pixel.GetBrightness(), pixel.A));
-            }
-
-            // Do not MemberwiseClone DXProjectImage: its internal DXImageFile reference
-            // would be shared with Ranger, and renaming the clone moves Ranger.png.
-            DXProjectImage copy = new DXProjectImage();
-            copy.Project = DXProject.Current;
-            // The game's Portraits category is atlas-optimized. A runtime-created image
-            // is absent from that atlas, so ImageArea indexes a missing atlas entry and
-            // crashes when army buttons render. Keep this generated portrait uncategorized.
-            copy.Category = null;
-            copy.Name = "BattleSisterPortrait";
-            copy.ID = source.ID ^ 0x4253495354455255UL;
-            // Image is backed by DXImageFile; assigning the recolored bitmap writes a
-            // unique PNG and refreshes this new image's independent file cache.
-            copy.Bitmap = recolored;
-            return copy;
-        }
-
-        private static Color ColorFromHsl(float hue, float saturation, float lightness, int alpha)
-        {
-            float chroma = (1f - Math.Abs(2f * lightness - 1f)) * saturation;
-            float h = hue / 60f;
-            float x = chroma * (1f - Math.Abs(h % 2f - 1f));
-            float r = 0f, g = 0f, b = 0f;
-            if (h < 1f) { r = chroma; g = x; }
-            else if (h < 2f) { r = x; g = chroma; }
-            else if (h < 3f) { g = chroma; b = x; }
-            else if (h < 4f) { g = x; b = chroma; }
-            else if (h < 5f) { r = x; b = chroma; }
-            else { r = chroma; b = x; }
-            float m = lightness - chroma / 2f;
-            return Color.FromArgb(alpha, (int)((r + m) * 255f), (int)((g + m) * 255f), (int)((b + m) * 255f));
         }
 
         private static void EnsureRegistrationRuleRows()
@@ -409,9 +347,16 @@ namespace BattleSisterMod
                 new[] { typeof(ZXEntity) });
             MethodInfo applyMod = AccessTools.Method(typeof(ZXDefaultParams), "ApplyMod",
                 new[] { typeof(ZXParameterModificator) });
+            MethodInfo setImage = AccessTools.Method(typeof(DXProjectImage), "SetImageFor");
+            MethodInfo veteranPortrait = AccessTools.Method(typeof(CVeteranUnit), "SetStyleToPortrait");
             HarmonyMethod campaignModGuard = new HarmonyMethod(typeof(AuraPatches), "BeforeCampaignMod");
             campaignModGuard.priority = Priority.Last;
             _harmony.Patch(applyMod, prefix: campaignModGuard);
+            _harmony.Patch(setImage,
+                prefix: new HarmonyMethod(typeof(PortraitTint), "BeforeSetImageFor"),
+                postfix: new HarmonyMethod(typeof(PortraitTint), "AfterSetImageFor"));
+            _harmony.Patch(veteranPortrait,
+                postfix: new HarmonyMethod(typeof(PortraitTint), "AfterVeteranPortraitStyle"));
             _harmony.Patch(trainVisibility, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeTrainVisibility"));
             _harmony.Patch(damage, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeDamage"));
             _harmony.Patch(attack, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeAttack"),
@@ -579,6 +524,57 @@ namespace BattleSisterMod
         {
             Sources.Clear();
             Shield.Clear();
+        }
+    }
+
+    internal static class PortraitTint
+    {
+        [ThreadStatic]
+        private static bool _nextImageIsBattleSister;
+
+        private static readonly HashSet<DXObject> TintedObjects = new HashSet<DXObject>();
+
+        internal static void MarkNextPortrait()
+        {
+            _nextImageIsBattleSister = true;
+        }
+
+        internal static void BeforeSetImageFor(DXObject o, ref bool __state)
+        {
+            __state = _nextImageIsBattleSister;
+            _nextImageIsBattleSister = false;
+
+            if (o != null && TintedObjects.Remove(o))
+                Reset(o);
+        }
+
+        internal static void AfterSetImageFor(DXObject o, bool __state)
+        {
+            if (__state && o != null)
+                Apply(o);
+        }
+
+        internal static void AfterVeteranPortraitStyle(DXObject o, ZXEntity entity, bool force)
+        {
+            if (o != null && entity is BattleSister)
+                Apply(o);
+        }
+
+        private static void Apply(DXObject o)
+        {
+            // Tint only the rendered UI object. Never change the shared Ranger image.
+            o.ColorHue = Color.Firebrick;
+            TintedObjects.Add(o);
+        }
+
+        private static void Reset(DXObject o)
+        {
+            o.ColorHue = Color.White;
+            o.Saturation = 1f;
+            o.Brightness = 1f;
+            o.Contrast = 1f;
+            o.HueRotation = 0f;
+            o.ShaderEffect = null;
         }
     }
 
