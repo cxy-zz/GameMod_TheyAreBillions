@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{D85C7A47-6F16-45E5-ACBE-EF269BD985CB}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>BattleSisterMod</RootNamespace>
+    <AssemblyName>BattleSister</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="TheyAreBillions">
+      <HintPath>..\..\temp_scripts\inbox\ModLoaderUpdate\TheyAreBillions_ModLoaderUpdate.exe</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="DXVision">
+      <HintPath>..\..\temp_scripts\inbox\TABModLoader-v1.1.6\tabmodloader\Lib\v1.1.0\DXVision.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="DXPlatform_Desktop">
+      <HintPath>..\..\temp_scripts\inbox\TABModLoader-v1.1.6\tabmodloader\Lib\v1.1.0\DXPlatform_Desktop.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Entity Registry Tools">
+      <HintPath>..\..\temp_scripts\inbox\Entity Creation Tools-34-1-01-1772214471\Entity Registry Tools\Entity Registry Tools.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>..\..\temp_scripts\inbox\TABModLoader-v1.1.6\tabmodloader\Lib\v1.1.0\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="BattleSisterMod.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

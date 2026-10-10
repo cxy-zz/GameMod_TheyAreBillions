@@ -1,0 +1,12 @@
+{
+  "id": "BattleSisterLocal",
+  "name": "Battle Sister",
+  "Description": "Adds a red-tinted Ranger variant that grants nearby Rangers temporary life and increased attack damage.",
+  "author": "Local",
+  "version": "1.0.0",
+  "Dependencies": [
+    "EntityRegistrationTools_NJ",
+    "customhiteffectools",
+    "PanelResolver_NJ"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "battle-sister-pack",
+  "name": "Battle Sister",
+  "version": "0.1.0",
+  "author": "Local Mod",
+  "frameworkVersion": "0.1",
+  "contentApiVersion": "1.0",
+  "units": [
+    "units/battle_sister.json"
+  ],
+  "buildings": [],
+  "strings": [
+    "strings/strings.csv"
+  ]
+}

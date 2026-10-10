@@ -1,0 +1,29 @@
+{
+  "id": "BattleSister",
+  "kind": "unit",
+  "baseUnit": "Ranger",
+  "displayNameKey": "Entity_BattleSister_Name",
+  "descriptionKey": "Entity_BattleSister_Desc",
+  "trainAt": "SoldiersCenter",
+  "trainMenuPosition": 8,
+  "stats": {
+    "Life": 400,
+    "WatchRange": 7
+  },
+  "cost": {
+    "GoldCost": 220,
+    "WoodCost": 4,
+    "FoodNeeded": 1,
+    "IronCost": 10
+  },
+  "commands": {
+    "Attack": {
+      "ActionRange": 7,
+      "Damage": 15
+    },
+    "AttackVeteran": {
+      "ActionRange": 7,
+      "Damage": 30
+    }
+  }
+}
