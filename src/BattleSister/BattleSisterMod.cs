@@ -11,6 +11,8 @@ using ZX;
 using ZX.Commands;
 using ZX.Components;
 using ZX.Entities;
+using ZX.GameSystems;
+using ZX.Systems;
 
 namespace BattleSisterMod
 {
@@ -30,7 +32,7 @@ namespace BattleSisterMod
 
         public override DXProjectImage GetPortraitImage()
         {
-            PortraitTint.MarkNextPortrait();
+            PortraitTint.MarkNextPortrait(Color.Firebrick);
             return Images.Portraits.get__Ranger();
         }
     }
@@ -48,6 +50,122 @@ namespace BattleSisterMod
         protected override void OnPerformEffect(ZXEntity actor, ZXCommandTarget target)
         {
             base.OnPerformEffect(actor, target);
+        }
+    }
+
+    public sealed class OttermarAuxiliary : ShooterSoldier
+    {
+        public override List<Type> DefaultComponents
+        {
+            get
+            {
+                List<Type> components = base.DefaultComponents;
+                components.Add(typeof(AuxiliaryGrenadeCharge));
+                return components;
+            }
+        }
+
+        public override DXProjectImage GetPortraitImage()
+        {
+            PortraitTint.MarkNextPortrait(Color.DodgerBlue);
+            return Images.Portraits.get__Soldier();
+        }
+
+        public override List<ZXCommand> GetSpecialCommands()
+        {
+            return new List<ZXCommand> { AuxiliaryGrenadeAbility.Instance };
+        }
+    }
+
+    public sealed class OttermarAuxiliaryAttack : ZXCommand { }
+    public sealed class OttermarAuxiliaryAttackVeteran : ZXCommand { }
+
+    public sealed class AuxiliaryGrenadeCharge : ZXComponent
+    {
+        public int Charges { get; set; } = 1;
+
+        public void Consume()
+        {
+            Charges = Math.Max(0, Charges - 1);
+        }
+    }
+
+    public sealed class AuxiliaryGrenadeAbility : ZXCommand
+    {
+        internal static readonly AuxiliaryGrenadeAbility Instance = new AuxiliaryGrenadeAbility();
+
+        public override int PanelPosition { get { return 9; } }
+        public override int Order { get { return 9; } }
+        public override bool UseCustomCountValue { get { return true; } }
+        public override ZXKeyboardCommand KeyboardCommand { get { return ZXKeyboardCommand.CommandThrowGrenade; } }
+        public override ZXTypeOfCommandTarget TargetType { get { return ZXTypeOfCommandTarget.EntityOrPosition; } }
+        public override ZXCommandProgessType ProgressType { get { return ZXCommandProgessType.Inmediate; } }
+
+        public override bool IsVisibleFor(ZXEntity entity)
+        {
+            AuxiliaryGrenadeCharge charge = entity == null ? null : ((DXEntity)entity).GetComponent<AuxiliaryGrenadeCharge>();
+            return entity is OttermarAuxiliary && charge != null && charge.Charges > 0;
+        }
+
+        public override int GetCustomCountValue(ZXEntity entity)
+        {
+            // ZXSystem_GameLevel passes _CurrentCommandCenter here even for a selected unit.
+            // Resolve the selected auxiliary directly so the icon shows its actual charge.
+            if (!(entity is OttermarAuxiliary))
+                entity = CSelectable.get_CurrentEntitySelected();
+            if (!(entity is OttermarAuxiliary))
+            {
+                HashSet<CSelectable> selectedUnits = CSelectable.AllSelected.GetObjectLocked();
+                try
+                {
+                    foreach (CSelectable selectable in selectedUnits)
+                    {
+                        ZXEntity selected = ((DXComponent)selectable).Entity as ZXEntity;
+                        if (selected is OttermarAuxiliary)
+                        {
+                            entity = selected;
+                            break;
+                        }
+                    }
+                }
+                finally { CSelectable.AllSelected.ReleaseObjectLocked(); }
+            }
+            AuxiliaryGrenadeCharge charge = entity == null ? null : ((DXEntity)entity).GetComponent<AuxiliaryGrenadeCharge>();
+            return charge == null ? 0 : charge.Charges;
+        }
+
+        public override DXProjectImage GetImageFor(ZXEntity entity)
+        {
+            return Images.Icons.get__IconGrenade();
+        }
+
+        public override string GetName(ZXEntity actor) { return "手雷"; }
+        public override string GetDescription(ZXEntity actor) { return "投掷随身携带的一枚手雷。"; }
+
+        protected override void OnExecute(ZXEntity actor, ZXCommandTarget target)
+        {
+            ZXCommand throwCommand = ZXGame.get_Current().Commands
+                .FirstOrDefault(c => c.GetType() == typeof(AuxiliaryGrenadeThrow));
+            if (throwCommand == null)
+            {
+                BattleSisterLog.Write("Auxiliary grenade throw command is not registered.");
+                return;
+            }
+            actor.get_CCommandable().set_Command(throwCommand);
+            actor.get_CCommandable().Target = target;
+        }
+    }
+
+    public sealed class AuxiliaryGrenadeThrow : Throw
+    {
+        public override bool IsVisibleFor(ZXEntity entity) { return false; }
+
+        protected override void OnPerformEffect(ZXEntity actor, ZXCommandTarget target)
+        {
+            base.OnPerformEffect(actor, target);
+            AuxiliaryGrenadeCharge charge = actor == null ? null : ((DXEntity)actor).GetComponent<AuxiliaryGrenadeCharge>();
+            if (charge != null)
+                charge.Consume();
         }
     }
 
@@ -88,6 +206,36 @@ namespace BattleSisterMod
             changePortraitColors = false
         };
 
+        private readonly EntityRegistry.EntityData _auxEntityData = new EntityRegistry.EntityData
+        {
+            entityName = "OttermarAuxiliary",
+            spriteAtlasEntityName = "HumansA",
+            spriteAtlasAnimationName = "Soldier_A",
+            useSpriteParameters = true
+        };
+
+        private readonly EntityRegistry.EntityCommandData _auxCommandData = new EntityRegistry.EntityCommandData
+        {
+            BaseEntityType = typeof(SoldierRegular),
+            ModdedEntityType = typeof(OttermarAuxiliary),
+            AttackCommandType = typeof(OttermarAuxiliaryAttack),
+            VeteranAttackCommandType = typeof(OttermarAuxiliaryAttackVeteran),
+            TechCommandType = typeof(EntityRegistry.NoCommand)
+        };
+
+        private readonly EntityRegistry.DefaultColorData _auxColor = new EntityRegistry.DefaultColorData
+        {
+            colorToReplace = Color.White,
+            colorToChangeTo = Color.White,
+            factorTolerance = 0f,
+            saturation = 1f,
+            brightness = 1f,
+            contrast = 1f,
+            hueRotation = 0,
+            colorHue = Color.DodgerBlue,
+            changePortraitColors = false
+        };
+
         public override void OnLoad(Mod mod)
         {
             BattleSisterLog.Write("OnLoad reached; mod entry was discovered by Mod Loader.");
@@ -98,6 +246,8 @@ namespace BattleSisterMod
             BattleSisterLog.Write("OnLoadResources entered; registering entity and barracks command.");
             try
             {
+                // Install the load-safety guard before any registration step can fail.
+                InstallAuraPatches();
                 EnsureRegistrationRuleRows();
                 ZXCommand sisterAttack;
                 ZXCommand sisterVeteranAttack;
@@ -105,8 +255,14 @@ namespace BattleSisterMod
 
                 ConfigureRuntimeValues(sisterAttack, sisterVeteranAttack);
 
-                InstallAuraPatches();
-                BattleSisterLog.Write("Entity registration and runtime setup completed.");
+                RegisterAuxiliaryGrenadeCommands();
+                ZXCommand auxiliaryAttack;
+                ZXCommand auxiliaryVeteranAttack;
+                EntityRegistry.RegisterEntity(_auxEntityData, _auxCommandData,
+                    out auxiliaryAttack, out auxiliaryVeteranAttack, null, _auxColor);
+                ConfigureAuxiliaryRuntimeValues(auxiliaryAttack, auxiliaryVeteranAttack);
+
+                BattleSisterLog.Write("Battle Sister and Ottermar Auxiliary registrations and runtime setup completed.");
             }
             catch (Exception ex)
             {
@@ -122,12 +278,18 @@ namespace BattleSisterMod
             CloneRuleRow(entities, "Ranger", "BattleSister");
             CloneRuleRow(commands, "RangerAttack", "BattleSisterAttack");
             CloneRuleRow(commands, "RangerAttackVeteran", "BattleSisterAttackVeteran");
+            CloneRuleRow(entities, "SoldierRegular", "OttermarAuxiliary");
+            CloneRuleRow(commands, "SoldierRegularAttack", "OttermarAuxiliaryAttack");
+            CloneRuleRow(commands, "SoldierRegularAttackVeteran", "OttermarAuxiliaryAttackVeteran");
 
             int attackCommandColumn;
             string[] entityRow;
             if (entities.Rows.TryGetValue("BattleSister", out entityRow) &&
                 entities.Cols.TryGetValue("AttackCommand", out attackCommandColumn))
                 entityRow[attackCommandColumn] = "BattleSisterAttack";
+            if (entities.Rows.TryGetValue("OttermarAuxiliary", out entityRow) &&
+                entities.Cols.TryGetValue("AttackCommand", out attackCommandColumn))
+                entityRow[attackCommandColumn] = "OttermarAuxiliaryAttack";
 
             BattleSisterLog.Write("Prepared ZXRules rows for BattleSister and its two attack commands.");
         }
@@ -190,7 +352,88 @@ namespace BattleSisterMod
                 "; damage=" + (attack == null || attack.get_Params() == null ? "unavailable" : attack.get_Params().Damage.ToString()) +
                 "; range=" + (attack == null || attack.get_Params() == null ? "unavailable" : attack.get_Params().ActionRange.ToString()));
 
-            RegisterTrainCommand();
+            RegisterTrainCommand(typeof(BattleSister));
+        }
+
+        private static void ConfigureAuxiliaryRuntimeValues(ZXCommand attack, ZXCommand veteranAttack)
+        {
+            attack = ResolveAttackCommand(attack, typeof(OttermarAuxiliaryAttack), "OttermarAuxiliaryAttack");
+            veteranAttack = ResolveAttackCommand(veteranAttack,
+                typeof(OttermarAuxiliaryAttackVeteran), "OttermarAuxiliaryAttackVeteran");
+            DXEntityTemplate soldierTemplate = DXProject.Current.EntityTemplates.Values
+                .FirstOrDefault(t => t.ClassType == typeof(SoldierRegular));
+            DXEntityTemplate auxiliaryTemplate = DXProject.Current.EntityTemplates.Values
+                .FirstOrDefault(t => t.ClassType == typeof(OttermarAuxiliary));
+            ZXEntity soldier = soldierTemplate == null ? null : soldierTemplate.Entity as ZXEntity;
+            ZXEntity auxiliary = auxiliaryTemplate == null ? null : auxiliaryTemplate.Entity as ZXEntity;
+            if (soldier == null || auxiliary == null || soldier.get_Params() == null)
+            {
+                BattleSisterLog.Write("SoldierRegular or OttermarAuxiliary template parameters were unavailable.");
+                return;
+            }
+
+            ZXEntityDefaultParams values = CopyProperties(soldier.get_Params(),
+                new ZXEntityDefaultParams("OttermarAuxiliary"));
+            values.Name = "奥特马拉凡人辅助军";
+            values.Description = "奥特马拉凡人辅助军，装备原版士兵武器并穿着蓝色制服。攻击力比士兵高20，移速提高0.5，随身携带一枚可投掷手雷。";
+            values.GoldCost = soldier.get_Params().GoldCost + 30;
+            values.IronCost = soldier.get_Params().IronCost + 1;
+            values.WalkSpeed = soldier.get_Params().WalkSpeed + 0.5f;
+            values.RunSpeed = soldier.get_Params().RunSpeed + 0.5f;
+            values.BuildingFrom = typeof(SoldiersCenter);
+            values.BuildingRequisite = typeof(SoldiersCenter);
+            values.AttackCommandBasic = attack;
+            values.AttackCommandVeteran = veteranAttack;
+            values.PanelPosition = FindFreeSoldiersCenterPanelPosition();
+            AddEntityDefaults("OttermarAuxiliary", values);
+            auxiliary.SetParams();
+
+            CopySoldierAttackValues(attack, "OttermarAuxiliaryAttack", typeof(SoldierRegularAttack));
+            CopySoldierAttackValues(veteranAttack, "OttermarAuxiliaryAttackVeteran", typeof(SoldierRegularAttackVeteran));
+            RegisterTrainCommand(typeof(OttermarAuxiliary));
+
+            BattleSisterLog.Write("Ottermar Auxiliary setup: gold=" + values.GoldCost +
+                "; iron=" + values.IronCost + "; walk/run=" + values.WalkSpeed + "/" + values.RunSpeed +
+                "; basic/veteran damage=" + attack.get_Params().Damage + "/" + veteranAttack.get_Params().Damage +
+                "; grenade ability=special; throw command=" +
+                (ZXGame.get_Current().Commands.OfType<AuxiliaryGrenadeThrow>().Any() ? "ready" : "missing"));
+        }
+
+        private static void RegisterAuxiliaryGrenadeCommands()
+        {
+            List<ZXCommand> commands = ZXGame.get_Current().Commands;
+            AuxiliaryGrenadeThrow grenadeThrow = commands.OfType<AuxiliaryGrenadeThrow>().FirstOrDefault();
+            if (grenadeThrow == null)
+            {
+                grenadeThrow = new AuxiliaryGrenadeThrow();
+                ZXCommand standardThrow = commands.FirstOrDefault(c => c.GetType() == typeof(ThrowGrenade));
+                if (standardThrow == null || standardThrow.get_Params() == null)
+                    throw new InvalidOperationException("Vanilla ThrowGrenade parameters were unavailable.");
+                ZXCommandDefaultParams values = CopyProperties(standardThrow.get_Params(),
+                    new ZXCommandDefaultParams("AuxiliaryGrenadeThrow"));
+                // Keep it available to the unit's command component while hiding it as a button.
+                values.ShowAsCommand = true;
+                values.AvailableFor = new List<Type> { typeof(OttermarAuxiliary) };
+                grenadeThrow.set_Params(AddCommandDefaults("AuxiliaryGrenadeThrow", values));
+                commands.Add(grenadeThrow);
+            }
+
+            CCommandable.ClearAvailableCommandsCache();
+        }
+
+        private static void CopySoldierAttackValues(ZXCommand target, string id, Type sourceType)
+        {
+            if (target == null) return;
+            ZXCommand source = ZXGame.get_Current().Commands.FirstOrDefault(c => c.GetType() == sourceType);
+            if (source == null || source.get_Params() == null)
+            {
+                BattleSisterLog.Write("Soldier attack parameters unavailable for " + id + ".");
+                return;
+            }
+            ZXCommandDefaultParams values = CopyProperties(source.get_Params(), new ZXCommandDefaultParams(id));
+            values.Damage = source.get_Params().Damage + 20;
+            values.AvailableFor = new List<Type> { typeof(OttermarAuxiliary) };
+            target.set_Params(AddCommandDefaults(id, values));
         }
 
         private static ZXCommand ResolveAttackCommand(ZXCommand registered, Type commandType, string id)
@@ -253,39 +496,39 @@ namespace BattleSisterMod
             target.set_Params(registeredValues);
         }
 
-        private static void RegisterTrainCommand()
+        private static void RegisterTrainCommand(Type unitType)
         {
             // EntityRegistry.RegisterEntity already creates a Train command for every registered Unit.
             // The barracks discovers units through EntityDefaultParams.BuildingFrom and then calls
             // Train.For(unitType); Train commands are not ShowAsCommand entries.
-            List<Train> sisterTrains = ZXGame.get_Current().Commands.OfType<Train>()
-                .Where(c => c.EntityType == typeof(BattleSister)).ToList();
-            Train train = sisterTrains.FirstOrDefault();
+            List<Train> unitTrains = ZXGame.get_Current().Commands.OfType<Train>()
+                .Where(c => c.EntityType == unitType).ToList();
+            Train train = unitTrains.FirstOrDefault();
             if (train == null)
             {
-                train = new Train(typeof(BattleSister));
+                train = new Train(unitType);
                 train.ReadParams();
                 ZXGame.get_Current().Commands.Add(train);
             }
             if (train.get_Params() == null)
             {
-                BattleSisterLog.Write("Registered Train command has no parameters; barracks button cannot be configured.");
+                BattleSisterLog.Write("Registered Train command has no parameters for " + unitType.Name + ".");
                 return;
             }
             // Avoid making Train appear through the generic AvailableFor command path as well.
             train.get_Params().ShowAsCommand = false;
-            foreach (Train duplicate in sisterTrains.Skip(1))
+            foreach (Train duplicate in unitTrains.Skip(1))
                 ZXGame.get_Current().Commands.Remove(duplicate);
             CCommandable.ClearAvailableCommandsCache();
 
-            ZXEntityDefaultParams unit = ZXGame.get_Current().GetParamsFromEntityType(typeof(BattleSister));
-            BattleSisterLog.Write("Configured barracks training. BuildingFrom=" +
+            ZXEntityDefaultParams unit = ZXGame.get_Current().GetParamsFromEntityType(unitType);
+            BattleSisterLog.Write("Configured barracks training for " + unitType.Name + ". BuildingFrom=" +
                 (unit == null || unit.BuildingFrom == null ? "none" : unit.BuildingFrom.Name) +
                 "; BuildingRequisite=" +
                 (unit == null || unit.BuildingRequisite == null
                     ? "unresolved"
                     : unit.BuildingRequisite.Name) +
-                "; TrainCommand=" + (Train.For(typeof(BattleSister)) == null ? "missing" : "ready"));
+                "; TrainCommand=" + (Train.For(unitType) == null ? "missing" : "ready"));
         }
 
         private static T CopyProperties<T>(T source, T destination) where T : class
@@ -349,6 +592,7 @@ namespace BattleSisterMod
                 new[] { typeof(ZXParameterModificator) });
             MethodInfo setImage = AccessTools.Method(typeof(DXProjectImage), "SetImageFor");
             MethodInfo veteranPortrait = AccessTools.Method(typeof(CVeteranUnit), "SetStyleToPortrait");
+            MethodInfo setEnemyVisibility = AccessTools.Method(typeof(CInvisibleWhenNotWatched), "SetVisibility");
             HarmonyMethod campaignModGuard = new HarmonyMethod(typeof(AuraPatches), "BeforeCampaignMod");
             campaignModGuard.priority = Priority.Last;
             _harmony.Patch(applyMod, prefix: campaignModGuard);
@@ -361,6 +605,7 @@ namespace BattleSisterMod
             _harmony.Patch(damage, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeDamage"));
             _harmony.Patch(attack, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeAttack"),
                 finalizer: new HarmonyMethod(typeof(AuraPatches), "RestoreAttackDamage"));
+            _harmony.Patch(setEnemyVisibility, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeEnemyVisibility"));
 
         }
     }
@@ -530,41 +775,46 @@ namespace BattleSisterMod
     internal static class PortraitTint
     {
         [ThreadStatic]
-        private static bool _nextImageIsBattleSister;
+        private static Color _nextPortraitHue;
 
-        private static readonly HashSet<DXObject> TintedObjects = new HashSet<DXObject>();
+        private static readonly Dictionary<DXObject, Color> TintedObjects = new Dictionary<DXObject, Color>();
 
-        internal static void MarkNextPortrait()
+        internal static void MarkNextPortrait(Color hue)
         {
-            _nextImageIsBattleSister = true;
+            _nextPortraitHue = hue;
         }
 
-        internal static void BeforeSetImageFor(DXObject o, ref bool __state)
+        internal static void BeforeSetImageFor(DXObject o, ref Color __state)
         {
-            __state = _nextImageIsBattleSister;
-            _nextImageIsBattleSister = false;
+            __state = _nextPortraitHue;
+            _nextPortraitHue = Color.Empty;
 
-            if (o != null && TintedObjects.Remove(o))
+            if (o != null && TintedObjects.ContainsKey(o))
+            {
+                TintedObjects.Remove(o);
                 Reset(o);
+            }
         }
 
-        internal static void AfterSetImageFor(DXObject o, bool __state)
+        internal static void AfterSetImageFor(DXObject o, Color __state)
         {
-            if (__state && o != null)
-                Apply(o);
+            if (__state != Color.Empty && o != null)
+                Apply(o, __state);
         }
 
         internal static void AfterVeteranPortraitStyle(DXObject o, ZXEntity entity, bool force)
         {
             if (o != null && entity is BattleSister)
-                Apply(o);
+                Apply(o, Color.Firebrick);
+            else if (o != null && entity is OttermarAuxiliary)
+                Apply(o, Color.DodgerBlue);
         }
 
-        private static void Apply(DXObject o)
+        private static void Apply(DXObject o, Color hue)
         {
-            // Tint only the rendered UI object. Never change the shared Ranger image.
-            o.ColorHue = Color.Firebrick;
-            TintedObjects.Add(o);
+            // Tint only the rendered UI object. Never change the shared unit portrait.
+            o.ColorHue = hue;
+            TintedObjects[o] = hue;
         }
 
         private static void Reset(DXObject o)
@@ -580,9 +830,23 @@ namespace BattleSisterMod
 
     internal static class AuraPatches
     {
+        internal static bool BeforeEnemyVisibility(CInvisibleWhenNotWatched __instance)
+        {
+            // Saved-game scene reconstruction can invoke this before the level extension or
+            // minimap watcher exists. The vanilla callback dereferences both without checking.
+            if (ZXLevelExtension.get_Current() == null || SysMiniMapUpdater.Current == null ||
+                __instance == null || __instance.Entity == null || __instance.Entity.SceneObject == null)
+            {
+                BattleSisterLog.Write("Skipped enemy visibility update while scene services were initializing.");
+                return false;
+            }
+            return true;
+        }
+
         internal static bool BeforeTrainVisibility(Train __instance, ref bool __result)
         {
-            if (__instance != null && __instance.EntityType == typeof(BattleSister))
+            if (__instance != null && (__instance.EntityType == typeof(BattleSister) ||
+                __instance.EntityType == typeof(OttermarAuxiliary)))
             {
                 // Campaign saves know only vanilla mission unlocks; custom units have no unlock row.
                 // BuildingFrom still restricts the command to the Soldiers Center, and Train's
