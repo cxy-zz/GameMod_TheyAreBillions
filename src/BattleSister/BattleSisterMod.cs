@@ -16,11 +16,28 @@ namespace BattleSisterMod
 {
     public sealed class BattleSister : ShooterSoldier
     {
+        private static DXProjectImage _portrait;
+
         public BattleSister() { }
+
+        internal static void SetPortrait(DXProjectImage portrait)
+        {
+            _portrait = portrait;
+        }
+
+        public override List<Type> DefaultComponents
+        {
+            get
+            {
+                List<Type> components = base.DefaultComponents;
+                components.Add(typeof(BattleSisterAura));
+                return components;
+            }
+        }
 
         public override DXProjectImage GetPortraitImage()
         {
-            return Images.Portraits.get__Soldier();
+            return _portrait ?? Images.Portraits.get__Ranger();
         }
     }
 
@@ -58,7 +75,7 @@ namespace BattleSisterMod
             BaseEntityType = typeof(Ranger),
             ModdedEntityType = typeof(BattleSister),
             AttackCommandType = typeof(BattleSisterAttack),
-            VeteranAttackCommandType = typeof(BattleSisterAttackVeteran),
+            VeteranAttackCommandType = typeof(EntityRegistry.NoCommand),
             TechCommandType = typeof(EntityRegistry.NoCommand)
         };
 
@@ -72,26 +89,119 @@ namespace BattleSisterMod
             contrast = 1f,
             hueRotation = 0,
             colorHue = Color.Firebrick,
-            changePortraitColors = true
+            // Apply portrait tint per Battle Sister UI object; the Registry's shared portrait
+            // drawing state can bleed into unrelated unit portraits.
+            changePortraitColors = false
         };
 
-        public override void OnLoad(Mod mod) { }
+        public override void OnLoad(Mod mod)
+        {
+            BattleSisterLog.Write("OnLoad reached; mod entry was discovered by Mod Loader.");
+        }
 
         public override void OnLoadResources()
         {
-            ZXCommand sisterAttack;
-            ZXCommand sisterVeteranAttack;
-            EntityRegistry.RegisterEntity(_entityData, _commandData, out sisterAttack, out sisterVeteranAttack, null, _color);
+            BattleSisterLog.Write("OnLoadResources entered; registering entity and barracks command.");
+            try
+            {
+                BattleSister.SetPortrait(CreateIsolatedRedRangerPortrait());
+                EnsureRegistrationRuleRows();
+                ZXCommand sisterAttack;
+                ZXCommand sisterVeteranAttack;
+                EntityRegistry.RegisterEntity(_entityData, _commandData, out sisterAttack, out sisterVeteranAttack, null, _color);
 
-            ConfigureRuntimeValues(sisterAttack, sisterVeteranAttack);
+                ConfigureRuntimeValues(sisterAttack, sisterVeteranAttack);
 
-            DXEntityTemplate template = DXProject.Current.EntityTemplates.Values
-                .FirstOrDefault(t => t.ClassType == typeof(BattleSister));
-            if (template != null)
-                template.Entity.AddComponent(new BattleSisterAura());
+                InstallAuraPatches();
+                BattleSisterLog.Write("Entity registration and runtime setup completed.");
+            }
+            catch (Exception ex)
+            {
+                BattleSisterLog.Write("ERROR during resource registration: " + ex);
+            }
+        }
 
-            InstallAuraPatches();
-            DXLog.Write("BattleSister registered with red tint and Ranger life aura.");
+        private static DXProjectImage CreateIsolatedRedRangerPortrait()
+        {
+            DXProjectImage source = Images.Portraits.get__Ranger();
+            Bitmap sourceBitmap = source == null ? null : source.Bitmap;
+            if (sourceBitmap == null && source != null && source.Image != null)
+                sourceBitmap = source.Image.PreviewBitmap;
+            if (sourceBitmap == null)
+            {
+                BattleSisterLog.Write("Could not read the Ranger portrait bitmap; using the unmodified source portrait.");
+                return source;
+            }
+
+            Bitmap recolored = new Bitmap(sourceBitmap);
+            for (int y = 0; y < recolored.Height; y++)
+            for (int x = 0; x < recolored.Width; x++)
+            {
+                Color pixel = recolored.GetPixel(x, y);
+                if (pixel.A == 0 || pixel.GetSaturation() < 0.12f) continue;
+                float hue = pixel.GetHue();
+                if (hue >= 70f && hue <= 175f)
+                    recolored.SetPixel(x, y, ColorFromHsl(2f, pixel.GetSaturation(), pixel.GetBrightness(), pixel.A));
+            }
+
+            // Do not MemberwiseClone DXProjectImage: its internal DXImageFile reference
+            // would be shared with Ranger, and renaming the clone moves Ranger.png.
+            DXProjectImage copy = new DXProjectImage();
+            copy.Project = DXProject.Current;
+            // The game's Portraits category is atlas-optimized. A runtime-created image
+            // is absent from that atlas, so ImageArea indexes a missing atlas entry and
+            // crashes when army buttons render. Keep this generated portrait uncategorized.
+            copy.Category = null;
+            copy.Name = "BattleSisterPortrait";
+            copy.ID = source.ID ^ 0x4253495354455255UL;
+            // Image is backed by DXImageFile; assigning the recolored bitmap writes a
+            // unique PNG and refreshes this new image's independent file cache.
+            copy.Bitmap = recolored;
+            return copy;
+        }
+
+        private static Color ColorFromHsl(float hue, float saturation, float lightness, int alpha)
+        {
+            float chroma = (1f - Math.Abs(2f * lightness - 1f)) * saturation;
+            float h = hue / 60f;
+            float x = chroma * (1f - Math.Abs(h % 2f - 1f));
+            float r = 0f, g = 0f, b = 0f;
+            if (h < 1f) { r = chroma; g = x; }
+            else if (h < 2f) { r = x; g = chroma; }
+            else if (h < 3f) { g = chroma; b = x; }
+            else if (h < 4f) { g = x; b = chroma; }
+            else if (h < 5f) { r = x; b = chroma; }
+            else { r = chroma; b = x; }
+            float m = lightness - chroma / 2f;
+            return Color.FromArgb(alpha, (int)((r + m) * 255f), (int)((g + m) * 255f), (int)((b + m) * 255f));
+        }
+
+        private static void EnsureRegistrationRuleRows()
+        {
+            DXTable entities = ZXGame.get_Current().TableManagerDefinitions.Tables["Entities"];
+            DXTable commands = ZXGame.get_Current().TableManagerDefinitions.Tables["Commands"];
+
+            CloneRuleRow(entities, "Ranger", "BattleSister");
+            CloneRuleRow(commands, "RangerAttack", "BattleSisterAttack");
+            CloneRuleRow(commands, "RangerAttackVeteran", "BattleSisterAttackVeteran");
+
+            int attackCommandColumn;
+            string[] entityRow;
+            if (entities.Rows.TryGetValue("BattleSister", out entityRow) &&
+                entities.Cols.TryGetValue("AttackCommand", out attackCommandColumn))
+                entityRow[attackCommandColumn] = "BattleSisterAttack";
+
+            BattleSisterLog.Write("Prepared ZXRules rows for BattleSister and its two attack commands.");
+        }
+
+        private static void CloneRuleRow(DXTable table, string sourceId, string targetId)
+        {
+            if (table.Rows.ContainsKey(targetId))
+                return;
+            string[] source;
+            if (!table.Rows.TryGetValue(sourceId, out source))
+                throw new InvalidOperationException("Cannot clone missing ZXRules row '" + sourceId + "' in table '" + table.Name + "'.");
+            table.Rows.Add(targetId, (string[])source.Clone());
         }
 
         public override void OnUnload()
@@ -111,26 +221,58 @@ namespace BattleSisterMod
             ZXEntity sister = sisterTemplate == null ? null : sisterTemplate.Entity as ZXEntity;
             if (ranger == null || sister == null || ranger.get_Params() == null)
             {
-                DXLog.Write("BattleSister: Ranger or BattleSister template parameters were unavailable.");
+                BattleSisterLog.Write("Ranger or BattleSister template parameters were unavailable.");
                 return;
             }
 
             ZXEntityDefaultParams unitValues = CopyProperties(ranger.get_Params(), new ZXEntityDefaultParams("BattleSister"));
-            unitValues.Name = "BattleSister";
-            unitValues.Life = ranger.get_Params().Life * 5;
+            attack = ResolveAttackCommand(attack, typeof(BattleSisterAttack), "BattleSisterAttack");
+            // The veteran shares the custom attack command; Entity Registry's veteran portrait
+            // style hook tints pooled portrait objects and can leak the tint to unrelated units.
+            veteranAttack = null;
+            unitValues.Name = "战斗修女";
+            unitValues.Description = "身披红色战甲的精锐女战士。生命值350，攻击伤害为游侠的1.5倍，射程比游侠多1格，攻击速度比同级游侠高1。她的生命光环庇护周围6格内的游侠：提供100点优先承受伤害的临时生命，并使攻击伤害提高20%。训练需要额外100金币和2钢铁。";
+            unitValues.Life = 350;
             unitValues.WatchRange = ranger.get_Params().WatchRange + 1;
             unitValues.GoldCost = ranger.get_Params().GoldCost + 100;
-            unitValues.IronCost = 10;
+            unitValues.IronCost = 2;
+            unitValues.BuildingFrom = typeof(SoldiersCenter);
+            unitValues.BuildingRequisite = typeof(SoldiersCenter);
             unitValues.AttackCommandBasic = attack;
-            unitValues.AttackCommandVeteran = veteranAttack;
+            unitValues.AttackCommandVeteran = attack;
             unitValues.PanelPosition = FindFreeSoldiersCenterPanelPosition();
             AddEntityDefaults("BattleSister", unitValues);
             sister.SetParams();
 
             CopyRangerAttackValues(attack, "BattleSisterAttack", 1.5f);
-            CopyRangerAttackValues(veteranAttack, "BattleSisterAttackVeteran", 1.5f);
+
+            BattleSisterLog.Write("BattleSister combat setup: basic=" +
+                (unitValues.AttackCommandBasic == null ? "null" : unitValues.AttackCommandBasic.GetType().Name) +
+                "; veteran=" + (unitValues.AttackCommandVeteran == null ? "null" : unitValues.AttackCommandVeteran.GetType().Name) +
+                "; damage=" + (attack == null || attack.get_Params() == null ? "unavailable" : attack.get_Params().Damage.ToString()) +
+                "; range=" + (attack == null || attack.get_Params() == null ? "unavailable" : attack.get_Params().ActionRange.ToString()));
 
             RegisterTrainCommand();
+        }
+
+        private static ZXCommand ResolveAttackCommand(ZXCommand registered, Type commandType, string id)
+        {
+            if (registered != null) return registered;
+            ZXCommand existing = ZXGame.get_Current().Commands.FirstOrDefault(c => c.GetType() == commandType);
+            if (existing != null) return existing;
+
+            ZXCommand created = (ZXCommand)Activator.CreateInstance(commandType);
+            created.ReadParams();
+            ZXGame.get_Current().Commands.Add(created);
+            if (created.get_Params() != null)
+            {
+                if (created.get_Params().DefaultValues == null)
+                    created.get_Params().DefaultValues = new ZXCommandDefaultParams(id);
+                if (!ZXDefaultParams.get_All().Contains(created.get_Params()))
+                    ZXDefaultParams.get_All().Add(created.get_Params());
+            }
+            BattleSisterLog.Write("Recovered missing attack command registration: " + id + ".");
+            return created;
         }
 
         private static int FindFreeSoldiersCenterPanelPosition()
@@ -141,7 +283,7 @@ namespace BattleSisterMod
             for (int slot = 1; slot <= 14; slot++)
                 if (slot != 11 && !used.Contains(slot))
                     return slot;
-            DXLog.Write("BattleSister: no free SoldiersCenter panel position was found; retaining the Ranger panel position.");
+            BattleSisterLog.Write("No free SoldiersCenter panel position was found; retaining the Ranger panel position.");
             ZXEntityDefaultParams ranger = ZXGame.get_Current().GetParamsFromEntityType(typeof(Ranger));
             return ranger == null ? 0 : ranger.PanelPosition;
         }
@@ -161,51 +303,51 @@ namespace BattleSisterMod
             ZXCommandDefaultParams values = CopyProperties(source, new ZXCommandDefaultParams(id));
             values.Damage = (int)Math.Round(source.Damage * damageFactor, MidpointRounding.AwayFromZero);
             values.ActionRange = source.ActionRange + 1f;
+            int rangerCycle = source.TimeAction + source.TimePreAction + source.TimePostAction;
+            if (rangerCycle > 0)
+            {
+                double desiredCycle = 1000.0 / (1000.0 / rangerCycle + 1.0);
+                values.TimeAction = Math.Max(1,
+                    (int)Math.Round(desiredCycle) - source.TimePreAction - source.TimePostAction);
+            }
             values.AvailableFor = new List<Type> { typeof(BattleSister) };
-            AddCommandDefaults(id, values);
-            target.set_Params(values);
+            ZXCommandDefaultParams registeredValues = AddCommandDefaults(id, values);
+            target.set_Params(registeredValues);
         }
 
         private static void RegisterTrainCommand()
         {
             // EntityRegistry.RegisterEntity already creates a Train command for every registered Unit.
-            // Update that exact command; adding a second Train instance for the same unit leaves the
-            // registry-created one with the unconfigured defaults used by the barracks UI.
-            Train train = Train.For(typeof(BattleSister));
-            Train rangerTrain = Train.For(typeof(Ranger));
+            // The barracks discovers units through EntityDefaultParams.BuildingFrom and then calls
+            // Train.For(unitType); Train commands are not ShowAsCommand entries.
+            List<Train> sisterTrains = ZXGame.get_Current().Commands.OfType<Train>()
+                .Where(c => c.EntityType == typeof(BattleSister)).ToList();
+            Train train = sisterTrains.FirstOrDefault();
             if (train == null)
             {
                 train = new Train(typeof(BattleSister));
                 train.ReadParams();
                 ZXGame.get_Current().Commands.Add(train);
             }
-
-            if (train.get_Params() == null && rangerTrain != null && rangerTrain.get_Params() != null)
-                train.set_Params(CopyProperties(rangerTrain.get_Params(), new ZXCommandDefaultParams("Train")));
-
             if (train.get_Params() == null)
             {
-                DXLog.Write("BattleSister: registered Train command has no parameters; barracks button cannot be configured.");
+                BattleSisterLog.Write("Registered Train command has no parameters; barracks button cannot be configured.");
                 return;
             }
+            // Avoid making Train appear through the generic AvailableFor command path as well.
+            train.get_Params().ShowAsCommand = false;
+            foreach (Train duplicate in sisterTrains.Skip(1))
+                ZXGame.get_Current().Commands.Remove(duplicate);
+            CCommandable.ClearAvailableCommandsCache();
 
-            List<Type> availableFor = train.get_Params().AvailableFor;
-            if (availableFor == null)
-                availableFor = new List<Type>();
-            if (!availableFor.Contains(typeof(SoldiersCenter)))
-                availableFor.Add(typeof(SoldiersCenter));
-            train.get_Params().AvailableFor = availableFor;
-            train.get_Params().ShowAsCommand = true;
-            if (rangerTrain != null && rangerTrain.get_Params() != null)
-                train.get_Params().Order = rangerTrain.get_Params().Order;
-
-            DXLog.Write("BattleSister: configured registered Train command. BuildingRequisite=" +
-                (train.Entity == null || train.Entity.get_Params() == null
+            ZXEntityDefaultParams unit = ZXGame.get_Current().GetParamsFromEntityType(typeof(BattleSister));
+            BattleSisterLog.Write("Configured barracks training. BuildingFrom=" +
+                (unit == null || unit.BuildingFrom == null ? "none" : unit.BuildingFrom.Name) +
+                "; BuildingRequisite=" +
+                (unit == null || unit.BuildingRequisite == null
                     ? "unresolved"
-                    : (train.Entity.get_Params().BuildingRequisite == null
-                        ? "none"
-                        : train.Entity.get_Params().BuildingRequisite.Name)) +
-                "; AvailableFor=" + string.Join(",", train.get_Params().AvailableFor.Select(t => t.Name).ToArray()));
+                    : unit.BuildingRequisite.Name) +
+                "; TrainCommand=" + (Train.For(typeof(BattleSister)) == null ? "missing" : "ready"));
         }
 
         private static T CopyProperties<T>(T source, T destination) where T : class
@@ -222,17 +364,29 @@ namespace BattleSisterMod
 
         private static void AddEntityDefaults(string id, ZXEntityDefaultParams values)
         {
-            ZXEntityDefaultParams record = new ZXEntityDefaultParams(id);
+            ZXEntityDefaultParams record;
+            if (!ZXGame.get_Current().DicDefaultParamsPerTemplate.TryGetValue(id, out record))
+            {
+                record = new ZXEntityDefaultParams(id);
+                ZXGame.get_Current().DicDefaultParamsPerTemplate[id] = record;
+                ZXDefaultParams.get_All().Add(record);
+            }
+
+            // Keep the exact record created by EntityRegistry. The entity template already holds
+            // this instance, so replacing the dictionary value leaves the template on stale params.
+            CopyProperties(values, record);
             record.DefaultValues = values;
-            AddDefaultRecord(id, record);
-            ZXGame.get_Current().DicDefaultParamsPerTemplate[id] = record;
         }
 
-        private static void AddCommandDefaults(string id, ZXCommandDefaultParams values)
+        private static ZXCommandDefaultParams AddCommandDefaults(string id, ZXCommandDefaultParams values)
         {
             ZXCommandDefaultParams record = new ZXCommandDefaultParams(id);
-            record.DefaultValues = values;
+            CopyProperties(values, record);
+            ZXCommandDefaultParams snapshot = CopyProperties(values, new ZXCommandDefaultParams(id));
+            snapshot.DefaultValues = null;
+            record.DefaultValues = snapshot;
             AddDefaultRecord(id, record);
+            return record;
         }
 
         private static void AddDefaultRecord(string id, ZXDefaultParams record)
@@ -251,70 +405,34 @@ namespace BattleSisterMod
                 new[] { typeof(int), typeof(bool), typeof(ZXDamageType) });
             MethodInfo attack = AccessTools.Method(typeof(ZXCommand), "PerformAttack",
                 new[] { typeof(ZXEntity), typeof(ZXEntity), typeof(PointF) });
+            MethodInfo trainVisibility = AccessTools.Method(typeof(Train), "IsVisibleFor",
+                new[] { typeof(ZXEntity) });
+            MethodInfo applyMod = AccessTools.Method(typeof(ZXDefaultParams), "ApplyMod",
+                new[] { typeof(ZXParameterModificator) });
+            HarmonyMethod campaignModGuard = new HarmonyMethod(typeof(AuraPatches), "BeforeCampaignMod");
+            campaignModGuard.priority = Priority.Last;
+            _harmony.Patch(applyMod, prefix: campaignModGuard);
+            _harmony.Patch(trainVisibility, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeTrainVisibility"));
             _harmony.Patch(damage, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeDamage"));
             _harmony.Patch(attack, prefix: new HarmonyMethod(typeof(AuraPatches), "BeforeAttack"),
                 finalizer: new HarmonyMethod(typeof(AuraPatches), "RestoreAttackDamage"));
 
-            MethodInfo setCurrentLevel = AccessTools.Method(typeof(ZXLevelState), "SetCurrentLevel",
-                new[] { typeof(DXLevel) });
-            _harmony.Patch(setCurrentLevel, postfix: new HarmonyMethod(typeof(CampaignStarter), "AfterSetCurrentLevel"));
         }
     }
 
-    internal static class CampaignStarter
+    internal static class BattleSisterLog
     {
-        internal static void AfterSetCurrentLevel(DXLevel level)
+        internal static void Write(string message)
         {
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + message + Environment.NewLine;
             try
             {
-                ZXMission mission = ZXMission.get_Current();
-                ZXCampaign campaign = ZXCampaign.get_Current();
-                if (level == null || mission == null || campaign == null || campaign.InitialMission == null ||
-                    mission.ID != campaign.InitialMission.ID)
-                    return;
-
-                if (level.Entities.OfType<BattleSister>().Any())
-                    return;
-
-                CommandCenter commandCenter = level.Entities.OfType<CommandCenter>().FirstOrDefault();
-                DXEntityTemplate template = DXProject.Current.EntityTemplates.Values
-                    .FirstOrDefault(t => t.ClassType == typeof(BattleSister));
-                if (commandCenter == null || template == null)
-                {
-                    DXLog.Write("BattleSister: unable to grant campaign starter unit (missing command center or template).");
-                    return;
-                }
-
-                Point origin = commandCenter.Cell;
-                for (int radius = 3; radius <= 7; radius++)
-                {
-                    for (int dx = -radius; dx <= radius; dx++)
-                    {
-                        int dy = radius - Math.Abs(dx);
-                        Point[] candidates = dy == 0
-                            ? new[] { new Point(origin.X + dx, origin.Y) }
-                            : new[] { new Point(origin.X + dx, origin.Y + dy), new Point(origin.X + dx, origin.Y - dy) };
-                        foreach (Point cell in candidates)
-                        {
-                            if (!level.IsCellInPlayableArea(cell) || level.Entities.Any(e => e.MaxCellArea.Contains(cell)))
-                                continue;
-
-                            ZXEntity sister = level.CreateEntity(template, cell) as ZXEntity;
-                            if (sister != null)
-                            {
-                                sister.Team = ZXTeamType.Player;
-                                DXLog.Write("BattleSister: granted one starter unit in the campaign's initial mission.");
-                            }
-                            return;
-                        }
-                    }
-                }
-                DXLog.Write("BattleSister: no free tile near the command center for the campaign starter unit.");
+                string path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    "Mods", "Battle Sister", "BattleSister.log");
+                System.IO.File.AppendAllText(path, line);
             }
-            catch (Exception ex)
-            {
-                DXLog.Write("BattleSister: starter unit grant failed: " + ex);
-            }
+            catch { }
+            DXLog.Write("[BattleSister] " + message);
         }
     }
 
@@ -323,6 +441,7 @@ namespace BattleSisterMod
         private const int ScanIntervalMs = 250;
         private int _nextScan;
         private readonly HashSet<ulong> _previousTargets = new HashSet<ulong>();
+        private DXObject _auraRange;
 
         public override string Description { get { return "Grants nearby Rangers temporary life and attack damage."; } }
         public override DXTypeOfComponentAvailability Availability { get { return DXTypeOfComponentAvailability.OnlyInGame; } }
@@ -330,6 +449,31 @@ namespace BattleSisterMod
         protected override void OnEntityAttached()
         {
             base.Entity.EventOnUpdate += ScanAura;
+            base.Entity.EventOnUpdateSceneObjectParallel += UpdateAuraRange;
+        }
+
+        protected override void OnSceneAdded()
+        {
+            base.OnSceneAdded();
+            _auraRange = new DXObject(Images.Effects.get__AttackRange())
+            {
+                Size = new SizeF(12f, 12f),
+                Z = 2147483547,
+                Visible = false,
+                Opacity = 0.55f,
+                ColorHue = Color.LightSkyBlue
+            };
+            _auraRange.Animation.NewClip(true, false).NewTransition(20000).DeltaAngle = 90f;
+            DXIsometricGridObject.Current.IsometricMiddle.AddObject(_auraRange);
+            UpdateAuraRange();
+        }
+
+        private void UpdateAuraRange()
+        {
+            if (_auraRange == null || Entity == null) return;
+            ZXEntity sister = Entity as ZXEntity;
+            _auraRange.Center = Entity.Position;
+            _auraRange.Visible = sister != null && sister.get_CSelectable() != null && sister.get_CSelectable().Selected;
         }
 
         private void ScanAura()
@@ -367,8 +511,16 @@ namespace BattleSisterMod
         {
             base.OnEntityDetached();
             Entity.EventOnUpdate -= ScanAura;
+            Entity.EventOnUpdateSceneObjectParallel -= UpdateAuraRange;
             AuraState.RemoveSource(Entity.ID);
             _previousTargets.Clear();
+        }
+
+        protected override void OnSceneRemoved()
+        {
+            base.OnSceneRemoved();
+            _auraRange?.RemoveFromScene();
+            _auraRange = null;
         }
     }
 
@@ -432,6 +584,77 @@ namespace BattleSisterMod
 
     internal static class AuraPatches
     {
+        internal static bool BeforeTrainVisibility(Train __instance, ref bool __result)
+        {
+            if (__instance != null && __instance.EntityType == typeof(BattleSister))
+            {
+                // Campaign saves know only vanilla mission unlocks; custom units have no unlock row.
+                // BuildingFrom still restricts the command to the Soldiers Center, and Train's
+                // resource validation remains active when the player queues it.
+                __result = true;
+                return false;
+            }
+            return true;
+        }
+
+        internal static bool BeforeCampaignMod(ZXParameterModificator mod)
+        {
+            if (mod == null || string.IsNullOrEmpty(mod.Parameter)) return true;
+
+            Type parameterType = mod.ParametersType == ZXParameterModificator.ZXParametersType.Entity
+                ? typeof(ZXEntityDefaultParams)
+                : typeof(ZXCommandDefaultParams);
+            PropertyInfo property = mod.Property;
+            if (property != null && property.DeclaringType != null &&
+                property.DeclaringType.IsAssignableFrom(parameterType))
+            {
+                RepairDefaultSnapshots(parameterType);
+                return true;
+            }
+
+            PropertyInfo corrected = parameterType.GetProperty(mod.Parameter,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (corrected == null)
+            {
+                BattleSisterLog.Write("Skipped incompatible campaign modifier: " + mod +
+                    "; parameter type=" + parameterType.FullName + "; property not found.");
+                return false;
+            }
+
+            BattleSisterLog.Write("Corrected campaign modifier reflection property: " + mod +
+                "; old declaring type=" + (property == null || property.DeclaringType == null
+                    ? "null" : property.DeclaringType.FullName) +
+                "; new declaring type=" + corrected.DeclaringType.FullName + ".");
+            mod.Property = corrected;
+            RepairDefaultSnapshots(parameterType);
+            return true;
+        }
+
+        private static void RepairDefaultSnapshots(Type parameterType)
+        {
+            foreach (ZXDefaultParams item in ZXDefaultParams.get_All())
+            {
+                if (item == null || !parameterType.IsInstanceOfType(item) ||
+                    (item.DefaultValues != null && parameterType.IsInstanceOfType(item.DefaultValues)))
+                    continue;
+
+                string oldSnapshotType = item.DefaultValues == null
+                    ? "null" : item.DefaultValues.GetType().FullName;
+                ZXDefaultParams snapshot = (ZXDefaultParams)Activator.CreateInstance(parameterType, item.ID);
+                foreach (PropertyInfo member in parameterType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (!member.CanRead || !member.CanWrite || member.GetIndexParameters().Length != 0 ||
+                        member.Name == "DefaultValues")
+                        continue;
+                    try { member.SetValue(snapshot, member.GetValue(item, null), null); }
+                    catch { }
+                }
+                item.DefaultValues = snapshot;
+                BattleSisterLog.Write("Rebuilt incompatible default snapshot for " + parameterType.Name +
+                    " ID='" + item.ID + "'; prior snapshot type=" + oldSnapshotType + ".");
+            }
+        }
+
         internal static bool BeforeDamage(CLife __instance, ref int __0)
         {
             ZXEntity target = __instance.Entity as ZXEntity;

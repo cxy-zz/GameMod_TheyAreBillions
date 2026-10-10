@@ -1,0 +1,4 @@
+D:\WorkSpace\GameMod_TheyAreBillions\src\BattleSister\bin\Release\BattleSister.dll
+D:\WorkSpace\GameMod_TheyAreBillions\src\BattleSister\obj\Release\BattleSisterMod.csproj.AssemblyReference.cache
+D:\WorkSpace\GameMod_TheyAreBillions\src\BattleSister\obj\Release\BattleSisterMod.csproj.CoreCompileInputs.cache
+D:\WorkSpace\GameMod_TheyAreBillions\src\BattleSister\obj\Release\BattleSister.dll

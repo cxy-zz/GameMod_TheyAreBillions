@@ -4,6 +4,9 @@
   "Description": "Adds a red-tinted Ranger variant that grants nearby Rangers temporary life and increased attack damage.",
   "author": "Local",
   "version": "1.0.0",
+  "Enabled": true,
+  "IsCampaign": true,
+  "IsGlobalEnabled": true,
   "Dependencies": [
     "EntityRegistrationTools_NJ",
     "customhiteffectools",
